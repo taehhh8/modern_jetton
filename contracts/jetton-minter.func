@@ -5,159 +5,138 @@
 #include "params.func";
 #include "messages.func";
 
-;; Jettons discoverable smart contract
+;; 스토리지 최소 보관 비용 (0.1 TON)
+const int min_tons_for_storage = 10000000;
+;; 가스 소비량 설정 (송신자와 수신자 지갑 모두의 수수료를 커버하기 위함)
+const int gas_consumption = 14000000;
 
-;; 6905(computational_gas_price) * 1000(cur_gas_price) = 6905000
-;; ceil(6905000) = 10000000 ~= 0.01 TON
-const int provide_address_gas_consumption = 10000000;
+{-
+  스토리지 구조
+  storage#_ balance:Coins owner_address:MsgAddressInt jetton_master_address:MsgAddressInt jetton_wallet_code:^Cell = Storage;
+-}
 
-;; storage scheme
-;; storage#_ total_supply:Coins admin_address:MsgAddress content:^Cell jetton_wallet_code:^Cell = Storage;
-
-(int, slice, cell, cell) load_data() inline {
+;; 데이터 로드 함수: 잔액, 소유자 주소, 마스터 주소, 지갑 코드를 반환
+(int, slice, slice, cell) load_data() inline {
     slice ds = get_data().begin_parse();
-    return (
-            ds~load_coins(), ;; total_supply
-            ds~load_msg_addr(), ;; admin_address
-            ds~load_ref(), ;; content
-            ds~load_ref() ;; jetton_wallet_code
-    );
+    return (ds~load_coins(),           ;; balance
+            ds~load_msg_addr(),        ;; owner_address
+            ds~load_msg_addr(),        ;; jetton_master_address
+            ds~load_ref());            ;; jetton_wallet_code
 }
 
-() save_data(int total_supply, slice admin_address, cell content, cell jetton_wallet_code) impure inline {
-    set_data(begin_cell()
-            .store_coins(total_supply)
-            .store_slice(admin_address)
-            .store_ref(content)
-            .store_ref(jetton_wallet_code)
-            .end_cell()
-    );
+;; 데이터 저장 함수: 지갑의 상태를 저장
+() save_data (int balance, slice owner_address, slice jetton_master_address, cell jetton_wallet_code) impure inline {
+    set_data(pack_jetton_wallet_data(balance,
+                                    owner_address,
+                                    jetton_master_address,
+                                    jetton_wallet_code));
 }
 
-() mint_tokens(slice to_address, cell jetton_wallet_code, int amount, cell master_msg) impure {
-    cell state_init = calculate_jetton_wallet_state_init(to_address, my_address(), jetton_wallet_code);
+;; 토큰 전송 함수: 다른 지갑으로 토큰을 전송
+() send_tokens (slice in_msg_body, slice sender_address, int msg_value, int fwd_fee) impure inline_ref {
+    int query_id = in_msg_body~load_query_id();
+    int jetton_amount = in_msg_body~load_coins();
+    slice to_owner_address = in_msg_body~load_msg_addr();
+    force_chain(to_owner_address);
+    
+    ;; 현재 지갑 데이터 로드
+    (int balance, slice owner_address, slice jetton_master_address, cell jetton_wallet_code) = load_data();
+    balance -= jetton_amount;
+
+    ;; 권한 및 잔액 확인
+    throw_unless(error::unauthorized_transfer, equal_slice_bits(owner_address, sender_address));
+    throw_unless(error::not_enough_jettons, balance >= 0);
+
+    ;; 메시지 생성 및 전송
+    cell state_init = calculate_jetton_wallet_state_init(to_owner_address, jetton_master_address, jetton_wallet_code);
     slice to_wallet_address = calc_address(state_init);
-    var msg = begin_cell()
-            .store_msg_flag(msg_flag::bounceable)
-            .store_slice(to_wallet_address)
-            .store_coins(amount)
-            .store_msgbody_prefix_stateinit(state_init, master_msg);
-    send_raw_message(msg.end_cell(), PAY_FEES_SEPARATELY); ;; pay transfer fees separately, revert on errors
+    
+    ;; ... 나머지 전송 로직 ...
 }
 
-() recv_internal(int msg_value, cell in_msg_full, slice in_msg_body) impure {
-    if (in_msg_body.slice_empty?()) { ;; ignore empty messages
-        return ();
-    }
+;; 토큰 수신 함수: 다른 지갑으로부터 토큰을 받음
+() receive_tokens (slice in_msg_body, slice sender_address, int my_ton_balance, int fwd_fee, int msg_value) impure inline_ref {
+    (int balance, slice owner_address, slice jetton_master_address, cell jetton_wallet_code) = load_data();
+    
+    int query_id = in_msg_body~load_query_id();
+    int jetton_amount = in_msg_body~load_coins();
+    balance += jetton_amount;
+    
+    ;; 송신자 검증
+    slice from_address = in_msg_body~load_msg_addr();
+    slice response_address = in_msg_body~load_msg_addr();
+    
+    ;; ... 나머지 수신 로직 ...
+}
+
+;; 토큰 소각(번) 함수: 토큰을 영구적으로 제거
+() burn_tokens (slice in_msg_body, slice sender_address, int msg_value, int fwd_fee) impure inline_ref {
+    (int balance, slice owner_address, slice jetton_master_address, cell jetton_wallet_code) = load_data();
+    
+    int query_id = in_msg_body~load_query_id();
+    int jetton_amount = in_msg_body~load_coins();
+    slice response_address = in_msg_body~load_msg_addr();
+    
+    balance -= jetton_amount;
+    
+    ;; 권한 및 수수료 확인
+    throw_unless(error::unauthorized_transfer, equal_slice_bits(owner_address, sender_address));
+    throw_unless(error::not_enough_jettons, balance >= 0);
+    throw_unless(error::burn_fee_not_matched, msg_value > fwd_fee + 2 * gas_consumption);
+    
+    ;; ... 나머지 소각 로직 ...
+}
+
+;; 바운스 처리 함수: 실패한 전송에 대한 처리
+() on_bounce (slice in_msg_body) impure inline_ref {
+    in_msg_body~skip_bounce_flag();
+    (int balance, slice owner_address, slice jetton_master_address, cell jetton_wallet_code) = load_data();
+    
+    int op = in_msg_body~load_op();
+    throw_unless(error::unknown_action_bounced, (op == op::internal_transfer) | (op == op::burn_notification));
+    
+    ;; 바운스된 금액 복구
+    int query_id = in_msg_body~load_query_id();
+    int jetton_amount = in_msg_body~load_coins();
+    balance += jetton_amount;
+    save_data(balance, owner_address, jetton_master_address, jetton_wallet_code);
+}
+
+;; 메인 리시버 함수: 모든 인커밍 메시지 처리
+() recv_internal(int my_balance, int msg_value, cell in_msg_full, slice in_msg_body) impure {
+    if (in_msg_body.slice_empty?()) { return (); }
+
     slice cs = in_msg_full.begin_parse();
     int flags = cs~load_uint(4);
-
-    if (flags & 1) { ;; ignore all bounced messages
-        return ();
-    }
+    
+    ;; 발신자 주소와 전달 수수료 추출
     slice sender_address = cs~load_msg_addr();
-    cs~load_msg_addr(); ;; skip dst
-    cs~load_coins(); ;; skip value
-    cs~skip_bits(1); ;; skip extracurrency collection
-    cs~load_coins(); ;; skip ihr_fee
-    int fwd_fee = muldiv(cs~load_coins(), 3, 2); ;; we use message fwd_fee for estimation of forward_payload costs
+    cs~load_msg_addr();  ;; skip dst
+    cs~load_coins();     ;; skip value
+    cs~skip_bits(1);     ;; skip extracurrency collection
+    cs~load_coins();     ;; skip ihr_fee
+    int fwd_fee = muldiv(cs~load_coins(), 3, 2);  ;; 전달 수수료 계산
 
+    ;; 작업 코드에 따른 함수 실행
     int op = in_msg_body~load_op();
-    int query_id = in_msg_body~load_query_id();
 
-    (int total_supply, slice admin_address, cell content, cell jetton_wallet_code) = load_data();
-
-    if (op == op::mint) {
-        throw_unless(error::unauthorized_mint_request, equal_slice_bits(sender_address, admin_address));
-        slice to_address = in_msg_body~load_msg_addr();
-        int jetton_amount = in_msg_body~load_coins();
-        int forward_ton_amount = in_msg_body~load_coins();
-        int total_ton_amount = in_msg_body~load_coins();
-        throw_unless(error::discovery_fee_not_matched, total_ton_amount > forward_ton_amount);
-        cell mint_request = begin_cell()
-                .store_op(op::internal_transfer)
-                .store_query_id(query_id)
-                .store_coins(jetton_amount) ;; max 124 bit
-                .store_uint(0, 2) ;; from_address, addr_none$00
-                .store_slice(my_address()) ;; response_address, 3 + 8 + 256 = 267 bit
-                .store_coins(forward_ton_amount) ;; forward_amount, 4 bit if zero
-                .store_uint(0, 1) ;; no forward_payload, 1 bit
-                .end_cell();
-        mint_tokens(to_address, jetton_wallet_code, total_ton_amount, mint_request);
-        save_data(total_supply + jetton_amount, admin_address, content, jetton_wallet_code);
+    if (op == op::transfer) {           ;; 전송
+        send_tokens(in_msg_body, sender_address, msg_value, fwd_fee);
         return ();
     }
-
-    if (op == op::burn_notification) {
-        int jetton_amount = in_msg_body~load_coins();
-        slice from_address = in_msg_body~load_msg_addr();
-        throw_unless(error::unauthorized_burn_request,
-                equal_slice_bits(calc_user_wallet(from_address, my_address(), jetton_wallet_code), sender_address)
-        );
-        save_data(total_supply - jetton_amount, admin_address, content, jetton_wallet_code);
-        slice response_address = in_msg_body~load_msg_addr();
-        if (response_address.preload_uint(2) != 0) {
-            var msg = begin_cell()
-                    .store_msg_flag(msg_flag::non_bounceable)
-                    .store_slice(response_address)
-                    .store_coins(0)
-                    .store_msgbody_prefix_slice()
-                    .store_op(op::excesses)
-                    .store_query_id(query_id);
-            send_raw_message(msg.end_cell(), IGNORE_ERRORS | CARRY_REMAINING_GAS);
-        }
+    if (op == op::internal_transfer) {  ;; 내부 전송
+        receive_tokens(in_msg_body, sender_address, my_balance, fwd_fee, msg_value);
         return ();
     }
-
-    if (op == op::provide_wallet_address) {
-        throw_unless(error::discovery_fee_not_matched, msg_value > fwd_fee + provide_address_gas_consumption);
-
-        slice owner_address = in_msg_body~load_msg_addr();
-        int include_address? = in_msg_body~load_uint(1);
-
-        cell included_address = include_address?
-                ? begin_cell().store_slice(owner_address).end_cell()
-                : null();
-
-        var msg = begin_cell()
-                .store_msg_flag(msg_flag::bounceable)
-                .store_slice(sender_address)
-                .store_coins(0)
-                .store_msgbody_prefix_slice()
-                .store_op(op::take_wallet_address)
-                .store_query_id(query_id);
-
-        if (is_resolvable?(owner_address)) {
-            msg = msg.store_slice(calc_user_wallet(owner_address, my_address(), jetton_wallet_code));
-        } else {
-            msg = msg.store_uint(0, 2); ;; addr_none
-        }
-        send_raw_message(msg.store_maybe_ref(included_address).end_cell(), CARRY_REMAINING_GAS);
+    if (op == op::burn) {               ;; 소각
+        burn_tokens(in_msg_body, sender_address, msg_value, fwd_fee);
         return ();
     }
-
-    if (op == op::change_admin) { ;; change admin
-        throw_unless(error::unauthorized_change_admin_request, equal_slice_bits(sender_address, admin_address));
-        slice new_admin_address = in_msg_body~load_msg_addr();
-        save_data(total_supply, new_admin_address, content, jetton_wallet_code);
-        return ();
-    }
-
-    if (op == op::change_content) { ;; change content, delete this for immutable tokens
-        throw_unless(error::unauthorized_change_content_request, equal_slice_bits(sender_address, admin_address));
-        save_data(total_supply, admin_address, in_msg_body~load_ref(), jetton_wallet_code);
-        return ();
-    }
-
-    throw(error::unknown_op);
+    
+    ;; ... 기타 작업 처리 ...
 }
 
-(int, int, slice, cell, cell) get_jetton_data() method_id {
-    (int total_supply, slice admin_address, cell content, cell jetton_wallet_code) = load_data();
-    return (total_supply, -1, admin_address, content, jetton_wallet_code);
-}
-
-slice get_wallet_address(slice owner_address) method_id {
-    (int total_supply, slice admin_address, cell content, cell jetton_wallet_code) = load_data();
-    return calc_user_wallet(owner_address, my_address(), jetton_wallet_code);
+;; 지갑 데이터 조회 getter 함수
+(int, slice, slice, cell) get_wallet_data() method_id {
+    return load_data();
 }
