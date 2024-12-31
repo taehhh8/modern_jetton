@@ -1,64 +1,57 @@
 import { Address, toNano } from 'ton-core';
-import { JettonMinter, jettonContentToCell } from '../wrappers/JettonMinter';
-import { compile, NetworkProvider } from '@ton-community/blueprint';
+import {
+    JettonMinter,
+    JettonMinterContent,
+    jettonContentToCell,
+    jettonMinterConfigToCell,
+} from '../wrappers/JettonMinter';
+import { compile, NetworkProvider, UIProvider } from '@ton-community/blueprint';
+import { promptAddress, promptBool, promptUrl } from '../wrappers/ui-utils';
+
+const formatUrl =
+    'https://github.com/ton-blockchain/TEPs/blob/master/text/0064-token-data-standard.md#jetton-metadata-example-offchain';
+const exampleContent = {
+    name: 'Sample Jetton',
+    description: 'Sample of Jetton',
+    symbol: 'JTN',
+    decimals: 0,
+    image: 'https://www.svgrepo.com/download/483336/coin-vector.svg',
+};
+const urlPrompt = 'Please specify url pointing to jetton metadata(json):';
 
 export async function run(provider: NetworkProvider) {
     const ui = provider.ui();
     const sender = provider.sender();
+    const adminPrompt = `Please specify admin address`;
+    ui.write(`Jetton deployer\nCurrent deployer onli supports off-chain format:${formatUrl}`);
 
-    if (!sender.address) {
-        throw new Error('Sender address must be provided');
-    }
-    const admin: Address = sender.address;
+    let admin = await promptAddress(adminPrompt, ui, sender.address);
+    ui.write(`Admin address:${admin}\n`);
+    let contentUrl = await promptUrl(urlPrompt, ui);
+    ui.write(`Jetton content url:${contentUrl}`);
 
-    const jettonMetadata = {
-        name: 'Test Game Token',
-        description: 'Token for testing game rewards',
-        symbol: 'GAME',
-        decimals: 9,
-        image: 'https://example.com/token-image.png',
-    };
+    let dataCorrect = false;
+    do {
+        ui.write('Please verify data:\n');
+        ui.write(`Admin:${admin}\n\n`);
+        ui.write('Metadata url:' + contentUrl);
+        dataCorrect = await promptBool('Is everything ok?(y/n)', ['y', 'n'], ui);
+        if (!dataCorrect) {
+            const upd = await ui.choose('What do you want to update?', ['Admin', 'Url'], (c) => c);
 
-    const content = jettonContentToCell({
-        type: 1,
-        uri: 'data:application/json,' + JSON.stringify(jettonMetadata),
-    });
+            if (upd == 'Admin') {
+                admin = await promptAddress(adminPrompt, ui, sender.address);
+            } else {
+                contentUrl = await promptUrl(urlPrompt, ui);
+            }
+        }
+    } while (!dataCorrect);
 
-    const minterCode = await compile('JettonMinter');
-    const walletCode = await compile('JettonWallet');
+    const content = jettonContentToCell({ type: 1, uri: contentUrl });
 
-    const minter = JettonMinter.createFromConfig(
-        {
-            admin,
-            content,
-            wallet_code: walletCode,
-        },
-        minterCode
-    );
+    const wallet_code = await compile('JettonWallet');
 
-    try {
-        // Deploy the contract
-        await provider.deploy(minter, toNano('0.5'));
+    const minter = JettonMinter.createFromConfig({ admin, content, wallet_code }, await compile('JettonMinter'));
 
-        ui.write('Jetton Minter deployed successfully!');
-        ui.write('Address: ' + minter.address.toString());
-        ui.write('Admin: ' + admin.toString());
-        ui.write('\nSave this minter address for use in claimGameReward.ts!');
-
-        // Get contract provider for the deployed contract
-        const contract = provider.open(minter);
-
-        // 초기 토큰 발행
-        await minter.sendMint(
-            contract, // Here we use the contract provider instead of network provider
-            sender,
-            admin,
-            toNano('1000'),
-            toNano('0.02'),
-            toNano('0.05')
-        );
-        ui.write('Initial tokens minted successfully!');
-    } catch (e) {
-        ui.write('Error deploying contract: ' + e);
-    }
+    await provider.deploy(minter, toNano('0.05'));
 }
