@@ -1,4 +1,4 @@
-import { Address, toNano, ContractProvider } from 'ton-core';
+import { Address, toNano } from 'ton-core';
 import { JettonMinter, jettonContentToCell } from '../wrappers/JettonMinter';
 import { compile, NetworkProvider } from '@ton-community/blueprint';
 
@@ -12,11 +12,11 @@ export async function run(provider: NetworkProvider) {
     const admin: Address = sender.address;
 
     const jettonMetadata = {
-        name: 'THanChain',
+        name: 'Test Game Token',
         description: 'Token for testing game rewards',
-        symbol: 'THAN',
+        symbol: 'GAME',
         decimals: 9,
-        image: 'https://raw.githubusercontent.com/hanchain-paykhan/hanchain/a45c5010b515f3d7f472c9a75e4703ee6a1b582f/logo/logo.svg',
+        image: 'https://example.com/token-image.png',
     };
 
     const content = jettonContentToCell({
@@ -37,6 +37,7 @@ export async function run(provider: NetworkProvider) {
     );
 
     try {
+        // Deploy the contract
         await provider.deploy(minter, toNano('0.5'));
 
         ui.write('Jetton Minter deployed successfully!');
@@ -44,15 +45,17 @@ export async function run(provider: NetworkProvider) {
         ui.write('Admin: ' + admin.toString());
         ui.write('\nSave this minter address for use in claimGameReward.ts!');
 
-        const contractProvider = provider.open(minter) as unknown as ContractProvider;
+        // Get contract provider for the deployed contract
+        const contract = provider.open(minter);
 
+        // 초기 토큰 발행
         await minter.sendMint(
-            contractProvider,
+            contract, // Here we use the contract provider instead of network provider
             sender,
             admin,
-            toNano('1000'), // jetton_amount
-            toNano('0.02'), // forward_ton_amount
-            toNano('0.05') // total_ton_amount
+            toNano('1000'),
+            toNano('0.02'),
+            toNano('0.05')
         );
         ui.write('Initial tokens minted successfully!');
     } catch (e) {
