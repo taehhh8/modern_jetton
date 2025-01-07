@@ -8,6 +8,10 @@ import {
     Sender,
     SendMode,
     toNano,
+<<<<<<< HEAD
+=======
+    OpenedContract,
+>>>>>>> 130ef51659534b09f6f76d677d34dc796121f5a7
 } from 'ton-core';
 
 export type JettonMinterContent = {
@@ -167,6 +171,26 @@ export class JettonMinter implements Contract {
     async getContent(provider: ContractProvider) {
         let res = await this.getJettonData(provider);
         return res.content;
+    }
+    // 게임 보상 청구 메시지 생성
+    static claimRewardMessage(player: Address, amount: bigint) {
+        return beginCell()
+            .storeUint(0x1674b0a0, 32) // mint operation
+            .storeUint(0, 64) // query id
+            .storeAddress(player)
+            .storeCoins(amount)
+            .storeCoins(toNano('0.02')) // forward amount
+            .storeCoins(toNano('0.05')) // total amount
+            .endCell();
+    }
+
+    // 보상 청구 메서드
+    async claimReward(provider: ContractProvider, via: Sender, amount: bigint) {
+        await provider.internal(via, {
+            value: toNano('0.05'),
+            sendMode: SendMode.PAY_GAS_SEPARATELY,
+            body: JettonMinter.claimRewardMessage(via.address!, amount),
+        });
     }
 }
 
