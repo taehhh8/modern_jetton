@@ -1,6 +1,8 @@
 #include "params.func";
 const int ONE_TON = 100;
 
+int equal_slices (slice s1, slice s2) asm "SDEQ";
+
 cell pack_jetton_wallet_data (int balance, slice owner, slice jetton_master, cell token_wallet_code) inline {
     return  begin_cell()
             .store_grams(balance)
@@ -40,3 +42,5 @@ slice calc_address(cell state_init) inline {
     return calc_address(calculate_jetton_wallet_state_init(owner, jetton_master, code));
 }
 
+int equal_slices (slice s1, slice s2) asm "SDEQ";
+;; ... 다른 유틸리티 함수들 ...

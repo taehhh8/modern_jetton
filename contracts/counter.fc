@@ -1,0 +1,32 @@
+;; Simple Counter Contract
+#include "stdlib.func";
+
+;; Storage variables
+global int counter;
+
+;; Load data from storage
+() load_data() impure {
+    var ds = get_data().begin_parse();
+    counter = ds~load_uint(32);
+    ds.end_parse();
+}
+
+;; Save data to storage
+() save_data() impure {
+    set_data(begin_cell()
+        .store_uint(counter, 32)
+        .end_cell()
+    );
+}
+
+;; Increment counter
+() increment() impure {
+    counter += 1;
+    save_data();
+}
+
+;; Get counter value
+(int) get_counter() method_id {
+    load_data();
+    return counter;
+}

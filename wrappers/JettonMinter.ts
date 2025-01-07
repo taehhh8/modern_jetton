@@ -1,25 +1,35 @@
-import { Address, beginCell, Cell, Contract, contractAddress, ContractProvider, Sender, SendMode, toNano } from 'ton-core';
+import {
+    Address,
+    beginCell,
+    Cell,
+    Contract,
+    contractAddress,
+    ContractProvider,
+    Sender,
+    SendMode,
+    toNano,
+} from 'ton-core';
 
 export type JettonMinterContent = {
-    type:0|1,
-    uri:string
+    type: 0 | 1;
+    uri: string;
 };
-export type JettonMinterConfig = {admin: Address; content: Cell; wallet_code: Cell};
+export type JettonMinterConfig = { admin: Address; content: Cell; wallet_code: Cell };
 
 export function jettonMinterConfigToCell(config: JettonMinterConfig): Cell {
     return beginCell()
-                      .storeCoins(0)
-                      .storeAddress(config.admin)
-                      .storeRef(config.content)
-                      .storeRef(config.wallet_code)
-           .endCell();
+        .storeCoins(0)
+        .storeAddress(config.admin)
+        .storeRef(config.content)
+        .storeRef(config.wallet_code)
+        .endCell();
 }
 
-export function jettonContentToCell(content:JettonMinterContent) {
+export function jettonContentToCell(content: JettonMinterContent) {
     return beginCell()
-                      .storeUint(content.type, 8)
-                      .storeStringTail(content.uri) //Snake logic under the hood
-           .endCell();
+        .storeUint(content.type, 8)
+        .storeStringTail(content.uri) //Snake logic under the hood
+        .endCell();
 }
 
 export class JettonMinter implements Contract {
@@ -43,29 +53,49 @@ export class JettonMinter implements Contract {
         });
     }
 
-    static mintMessage(to: Address, jetton_amount: bigint, forward_ton_amount: bigint, total_ton_amount: bigint,) {
-        return beginCell().storeUint(0x1674b0a0, 32).storeUint(0, 64) // op, queryId
-                          .storeAddress(to).storeCoins(jetton_amount)
-                          .storeCoins(forward_ton_amount).storeCoins(total_ton_amount)
-               .endCell();
+    static mintMessage(to: Address, jetton_amount: bigint, forward_ton_amount: bigint, total_ton_amount: bigint) {
+        return beginCell()
+            .storeUint(0x1674b0a0, 32)
+            .storeUint(0, 64) // op, queryId
+            .storeAddress(to)
+            .storeCoins(jetton_amount)
+            .storeCoins(forward_ton_amount)
+            .storeCoins(total_ton_amount)
+            .endCell();
     }
-    async sendMint(provider: ContractProvider, via: Sender, to: Address, jetton_amount: bigint, forward_ton_amount: bigint, total_ton_amount: bigint,) {
+    async sendMint(
+        provider: ContractProvider,
+        via: Sender,
+        to: Address,
+        jetton_amount: bigint,
+        forward_ton_amount: bigint,
+        total_ton_amount: bigint
+    ) {
         await provider.internal(via, {
             sendMode: SendMode.PAY_GAS_SEPARATELY,
-            body: JettonMinter.mintMessage(to, jetton_amount, forward_ton_amount, total_ton_amount,),
-            value: total_ton_amount + toNano("0.1"),
+            body: JettonMinter.mintMessage(to, jetton_amount, forward_ton_amount, total_ton_amount),
+            value: total_ton_amount + toNano('0.1'),
         });
     }
 
     /* provide_wallet_address#2c76b973 query_id:uint64 owner_address:MsgAddress include_address:Bool = InternalMsgBody;
-    */
+     */
     static discoveryMessage(owner: Address, include_address: boolean) {
-        return beginCell().storeUint(0x2c76b973, 32).storeUint(0, 64) // op, queryId
-                          .storeAddress(owner).storeBit(include_address)
-               .endCell();
+        return beginCell()
+            .storeUint(0x2c76b973, 32)
+            .storeUint(0, 64) // op, queryId
+            .storeAddress(owner)
+            .storeBit(include_address)
+            .endCell();
     }
 
-    async sendDiscovery(provider: ContractProvider, via: Sender, owner: Address, include_address: boolean, value:bigint = toNano('0.1')) {
+    async sendDiscovery(
+        provider: ContractProvider,
+        via: Sender,
+        owner: Address,
+        include_address: boolean,
+        value: bigint = toNano('0.1')
+    ) {
         await provider.internal(via, {
             sendMode: SendMode.PAY_GAS_SEPARATELY,
             body: JettonMinter.discoveryMessage(owner, include_address),
@@ -74,34 +104,40 @@ export class JettonMinter implements Contract {
     }
 
     static changeAdminMessage(newOwner: Address) {
-        return beginCell().storeUint(0x4840664f, 32).storeUint(0, 64) // op, queryId
-                          .storeAddress(newOwner)
-               .endCell();
+        return beginCell()
+            .storeUint(0x4840664f, 32)
+            .storeUint(0, 64) // op, queryId
+            .storeAddress(newOwner)
+            .endCell();
     }
 
     async sendChangeAdmin(provider: ContractProvider, via: Sender, newOwner: Address) {
         await provider.internal(via, {
             sendMode: SendMode.PAY_GAS_SEPARATELY,
             body: JettonMinter.changeAdminMessage(newOwner),
-            value: toNano("0.1"),
+            value: toNano('0.1'),
         });
     }
     static changeContentMessage(content: Cell) {
-        return beginCell().storeUint(0x5773d1f5, 32).storeUint(0, 64) // op, queryId
-                          .storeRef(content)
-               .endCell();
+        return beginCell()
+            .storeUint(0x5773d1f5, 32)
+            .storeUint(0, 64) // op, queryId
+            .storeRef(content)
+            .endCell();
     }
 
     async sendChangeContent(provider: ContractProvider, via: Sender, content: Cell) {
         await provider.internal(via, {
             sendMode: SendMode.PAY_GAS_SEPARATELY,
             body: JettonMinter.changeContentMessage(content),
-            value: toNano("0.1"),
+            value: toNano('0.1'),
         });
     }
     async getWalletAddress(provider: ContractProvider, owner: Address): Promise<Address> {
-        const res = await provider.get('get_wallet_address', [{ type: 'slice', cell: beginCell().storeAddress(owner).endCell() }])
-        return res.stack.readAddress()
+        const res = await provider.get('get_wallet_address', [
+            { type: 'slice', cell: beginCell().storeAddress(owner).endCell() },
+        ]);
+        return res.stack.readAddress();
     }
 
     async getJettonData(provider: ContractProvider) {
@@ -116,7 +152,7 @@ export class JettonMinter implements Contract {
             mintable,
             adminAddress,
             content,
-            walletCode
+            walletCode,
         };
     }
 
@@ -131,5 +167,46 @@ export class JettonMinter implements Contract {
     async getContent(provider: ContractProvider) {
         let res = await this.getJettonData(provider);
         return res.content;
+    }
+}
+
+export class GameJettonMinter extends JettonMinter {
+    // 기존 JettonMinter 코드 상속
+
+    static createFromConfig(config: JettonMinterConfig & { gameMaster: Address }, code: Cell, workchain = 0) {
+        const data = beginCell()
+            .storeCoins(0)
+            .storeAddress(config.admin)
+            .storeAddress(config.gameMaster)
+            .storeRef(config.content)
+            .storeRef(config.wallet_code)
+            .endCell();
+        const init = { code, data };
+        return new GameJettonMinter(contractAddress(workchain, init), init);
+    }
+
+    // 보상 청구 메시지 생성
+    static claimRewardMessage(to: Address, amount: bigint) {
+        return beginCell()
+            .storeUint(0x1674b0a0, 32)
+            .storeUint(0, 64) // query_id
+            .storeAddress(to)
+            .storeCoins(amount)
+            .endCell();
+    }
+
+    // 보상 청구 함수
+    async sendClaimReward(provider: ContractProvider, via: Sender, to: Address, amount: bigint) {
+        await provider.internal(via, {
+            value: toNano('0.05'),
+            body: GameJettonMinter.claimRewardMessage(to, amount),
+            sendMode: SendMode.PAY_GAS_SEPARATELY,
+        });
+    }
+
+    // 게임 마스터 주소 조회
+    async getGameMaster(provider: ContractProvider): Promise<Address> {
+        const { stack } = await provider.get('get_game_master', []);
+        return stack.readAddress();
     }
 }
